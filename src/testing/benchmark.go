@@ -365,6 +365,17 @@ func (r BenchmarkResult) NsPerOp() int64 {
 	return r.T.Nanoseconds() / int64(r.N)
 }
 
+// "ns/op" without loosing precision
+func (r BenchmarkResult) NsPerOpFloat() float64 {
+	if v, ok := r.Extra["ns/op"]; ok {
+		return v
+	}
+	if r.N <= 0 {
+		return 0
+	}
+	return float64(r.T.Nanoseconds()) / float64(r.N)
+}
+
 // mbPerSec returns the "MB/s" metric.
 func (r BenchmarkResult) mbPerSec() float64 {
 	if v, ok := r.Extra["MB/s"]; ok {
@@ -542,6 +553,7 @@ func runBenchmarks(importPath string, matchString func(pat, str string) (bool, e
 // processBench runs bench b for the configured CPU counts and prints the results.
 func (ctx *benchContext) processBench(b *B) {
 	for i, procs := range cpuList {
+		var stat_results []float64
 		for j := uint(0); j < *count; j++ {
 			runtime.GOMAXPROCS(procs)
 			benchName := benchmarkName(b.name, procs)
@@ -569,6 +581,7 @@ func (ctx *benchContext) processBench(b *B) {
 				continue
 			}
 			results := r.String()
+			stat_results = append(stat_results, r.NsPerOpFloat())
 			if *benchmarkMemory || b.showAllocResult {
 				results += "\t" + r.MemString()
 			}
@@ -583,7 +596,26 @@ func (ctx *benchContext) processBench(b *B) {
 				fmt.Fprintf(os.Stderr, "testing: %s left GOMAXPROCS set to %d\n", benchName, p)
 			}
 		}
+		if *count >= 5 {
+			mean, ci95 := statMeanCi(stat_results)
+			fmt.Fprintf(b.w, "--- Overall: %s\t%12.1f±%0.2f ns/op\n", benchmarkName(b.name, procs), mean, ci95)
+		}
 	}
+}
+
+// Calculate mean and 95% confidence interval
+func statMeanCi(v []float64) (float64, float64) {
+	var r float64
+	for _, e := range v {
+		r += e
+	}
+	var mean = r / float64(len(v))
+	var s float64
+	for _, e := range v {
+		s += (e - mean) * (e - mean)
+	}
+	s = math.Sqrt(s / float64(len(v) - 1))
+	return mean, 1.96 * s / math.Sqrt(float64(len(v)))
 }
 
 // Run benchmarks f as a subbenchmark with the given name. It reports
